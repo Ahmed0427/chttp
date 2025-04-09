@@ -27,6 +27,14 @@ typedef struct {
     char *body;          
 } http_request_t;
 
+typedef struct {
+    char* version;        
+    short status_code;         
+    char* status_message; 
+    http_header_t *headers_list; 
+    char *body;
+} http_response_t;
+
 void free_http_request(http_request_t *req) {
     http_header_t *ent = req->headers_list;
     for (;ent;) {
@@ -150,15 +158,14 @@ int main() {
             close(cfd);
             continue;
         }
+
         http_request_t http_req;
         parse_http_req(req_buf, &http_req); 
+
         char resp_buf[MAX_LEN] = {0};
         prepare_resp(resp_buf, &http_req);
-        if (write(cfd, resp_buf, strlen(resp_buf)) == -1) {
-            free_http_request(&http_req);
-            close(cfd);
-            continue;
-        }
+
+        write(cfd, resp_buf, strlen(resp_buf));
 
         free_http_request(&http_req);
         close(cfd);
