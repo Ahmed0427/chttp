@@ -25,7 +25,7 @@ typedef struct {
     char *version;      
     http_header_t *headers_list; 
     char *body;          
-} http_request_t;
+} http_req_t;
 
 typedef struct {
     char* version;        
@@ -33,9 +33,9 @@ typedef struct {
     char* status_message; 
     http_header_t *headers_list; 
     char *body;
-} http_response_t;
+} http_resp_t;
 
-void free_http_request(http_request_t *req) {
+void free_http_req(http_req_t *req) {
     http_header_t *ent = req->headers_list;
     for (;ent;) {
         http_header_t *next = ent->next;
@@ -45,7 +45,7 @@ void free_http_request(http_request_t *req) {
     }
 }
 
-void print_http_request(http_request_t *req) {
+void print_http_req(http_req_t *req) {
     printf("%s %s %s\r\n", req->method, req->url, req->version);
     http_header_t *ent = req->headers_list;
     for (; ent; ent = ent->next) {
@@ -57,7 +57,7 @@ void print_http_request(http_request_t *req) {
     printf("\r\n");
 }
 
-void parse_req_line(char* req_line, http_request_t *req) {
+void parse_req_line(char* req_line, http_req_t *req) {
     char *saveptr;
     req->method = strtok_r(req_line, " ", &saveptr);
     req->url = strtok_r(NULL, " ", &saveptr);
@@ -65,20 +65,26 @@ void parse_req_line(char* req_line, http_request_t *req) {
     req->version[strcspn(req->version, "\r")] = '\0';
 }
 
-void parse_header_line(char* header_line, http_request_t *req) { 
+void add_header(http_header_t **headers_list, char* name, char* value) {
     http_header_t *ent = malloc(sizeof(http_header_t));
     if (ent == NULL) {
         handle_error("malloc error");
     }
-    char *saveptr;
-    ent->name = strtok_r(header_line, " ", &saveptr);
-    ent->value = strtok_r(NULL, "\r", &saveptr);
-    ent->name[strcspn(ent->name, ":")] = '\0';
-    ent->next = req->headers_list;
-    req->headers_list = ent;
+    ent->name = name;
+    ent->value = value;
+    ent->next = *headers_list;
+    *headers_list = ent;
 }
 
-void parse_http_req(char* req_buf, http_request_t *http_req) {
+void parse_header_line(char* header_line, http_req_t *req) { 
+    char *saveptr;
+    char *name = strtok_r(header_line, " ", &saveptr);
+    name[strcspn(name, ":")] = '\0';
+    char *value = strtok_r(NULL, "\r", &saveptr);
+    add_header(&req->headers_list, name, value);
+}
+
+void parse_http_req(char* req_buf, http_req_t *http_req) {
     char *saveptr, *header_line;
     char *req_line = strtok_r(req_buf, "\n", &saveptr);
     parse_req_line(req_line, http_req);
@@ -93,7 +99,7 @@ void parse_http_req(char* req_buf, http_request_t *http_req) {
     http_req->body = strtok_r(NULL, "\r", &saveptr);
 }
 
-void prepare_resp(char* resp_buf, http_request_t *req) {
+void prepare_resp(char* resp_buf, http_req_t *req) {
     resp_buf[0] = '\0';
 
     char body[] = "Hello World";
@@ -159,15 +165,16 @@ int main() {
             continue;
         }
 
-        http_request_t http_req;
+        http_req_t http_req;
         parse_http_req(req_buf, &http_req); 
+        print_http_req(&http_req);
 
         char resp_buf[MAX_LEN] = {0};
         prepare_resp(resp_buf, &http_req);
 
         write(cfd, resp_buf, strlen(resp_buf));
 
-        free_http_request(&http_req);
+        free_http_req(&http_req);
         close(cfd);
     }
 
