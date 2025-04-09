@@ -9,7 +9,8 @@
 #define handle_error(msg) \
 do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-#define MAX_LEN 5120
+#define MAX_SIZE 1024 * 10
+#define MAX_BODY_SIZE 1024 * 8
 #define LISTEN_BACKLOG 50
 #define PORT 8080
 
@@ -57,6 +58,18 @@ void print_http_req(http_req_t *req) {
     printf("\r\n");
 }
 
+void print_http_resp(http_resp_t *resp) {
+    printf("%s %d %s\r\n", resp->version, resp->status_code, resp->status_message);
+    http_header_t *ent = resp->headers_list;
+    for (; ent; ent = ent->next) {
+        printf("%s: %s\r\n", ent->name, ent->value);
+    }
+    if (resp->body) {
+        printf("\r\n%s", resp->body);
+    }
+    printf("\r\n");
+}
+
 void parse_req_line(char* req_line, http_req_t *req) {
     char *saveptr;
     req->method = strtok_r(req_line, " ", &saveptr);
@@ -99,24 +112,57 @@ void parse_http_req(char* req_buf, http_req_t *http_req) {
     http_req->body = strtok_r(NULL, "\r", &saveptr);
 }
 
-void prepare_resp(char* resp_buf, http_req_t *req) {
+void read_file(char *buffer, char *path, size_t max_size) {
+    FILE* fd = fopen(path, "rb");
+
+    size_t file_size;
+    fseek(fd, 0L, SEEK_END);
+    if (max_size > (file_size = ftell(fd))) {
+        max_size =  file_size;
+    }
+    rewind(fd);
+
+    size_t read_size = fread(buffer, max_size, 1, fd);
+    if (read_size != 1) {
+        handle_error("fread error");
+    } 
+}
+
+void prepare_resp_buf(char* resp_buf, http_req_t *req) {
     resp_buf[0] = '\0';
 
-    char body[] = "Hello World";
-    size_t body_len = strlen(body);
+    http_resp_t resp;
+    resp.body = malloc(MAX_BODY_SIZE);
+    memset(resp.body, '\0', MAX_BODY_SIZE);
+    resp.version = req->version;
 
-    strcat(resp_buf, req->version);
-    strcat(resp_buf, " 200 OK\r\n");
+    if (fopen(req->url + 1, "rb")) {
+        read_file(resp.body, req->url + 1, MAX_BODY_SIZE);
+        resp.status_code = 200;
+        resp.status_message = "OK";
+    } else {
+        strcpy(resp.body, "File Not Found");
+        resp.status_code = 404;
+        resp.status_message = "Not Found";
+    }
 
-    char content_length[50];
-    strcat(resp_buf, "Content-Type: text/plain\r\n");
-    sprintf(content_length, "Content-Length: %zu\r\n", body_len);
+    char resp_line[128] = {0};
+    sprintf(resp_line, "%s %d %s\r\n", resp.version,
+            resp.status_code, resp.status_message);
+
+    strcat(resp_buf, resp_line);
+
+    char content_length[64];
+    strcat(resp_buf, "Content-Type: text/html\r\n");
+    sprintf(content_length, "Content-Length: %zu\r\n", strlen(resp.body));
     strcat(resp_buf, content_length);  
 
     strcat(resp_buf, "\r\n");
 
-    strcat(resp_buf, body);
+    strcat(resp_buf, resp.body);
     strcat(resp_buf, "\r\n");  
+    
+    free(resp.body);
 }
 
 int main() {
@@ -159,22 +205,23 @@ int main() {
             continue;
         }
 
-        char req_buf[MAX_LEN] = {0};
-        if (read(cfd, req_buf, MAX_LEN) == -1) {
+        char req_buf[MAX_SIZE] = {0};
+        if (read(cfd, req_buf, MAX_SIZE) == -1) {
             close(cfd);
             continue;
         }
 
-        http_req_t http_req;
-        parse_http_req(req_buf, &http_req); 
-        print_http_req(&http_req);
+        http_req_t req;
+        parse_http_req(req_buf, &req); 
+        print_http_req(&req);
 
-        char resp_buf[MAX_LEN] = {0};
-        prepare_resp(resp_buf, &http_req);
+        char resp_buf[MAX_SIZE] = {0};
+        prepare_resp_buf(resp_buf, &req);
+        printf("%s", resp_buf);
 
         write(cfd, resp_buf, strlen(resp_buf));
 
-        free_http_req(&http_req);
+        free_http_req(&req);
         close(cfd);
     }
 
