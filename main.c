@@ -12,7 +12,6 @@ do { perror(msg); exit(EXIT_FAILURE); } while (0)
 #define MAX_SIZE 1024 * 10
 #define MAX_BODY_SIZE 1024 * 8
 #define LISTEN_BACKLOG 50
-#define PORT 8080
 
 typedef struct http_header_t {
     char *name;          
@@ -36,8 +35,8 @@ typedef struct {
     char *body;
 } http_resp_t;
 
-void free_http_req(http_req_t *req) {
-    http_header_t *ent = req->headers_list;
+void free_headers(http_header_t *headers) {
+    http_header_t *ent = headers;
     for (;ent;) {
         http_header_t *next = ent->next;
         free(ent);
@@ -132,18 +131,19 @@ void prepare_resp_buf(char* resp_buf, http_req_t *req) {
     resp_buf[0] = '\0';
 
     http_resp_t resp;
+    resp.headers_list = NULL;
     resp.body = malloc(MAX_BODY_SIZE);
     memset(resp.body, '\0', MAX_BODY_SIZE);
     resp.version = req->version;
 
     if (fopen(req->url + 1, "rb")) {
         read_file(resp.body, req->url + 1, MAX_BODY_SIZE);
-        resp.status_code = 200;
         resp.status_message = "OK";
+        resp.status_code = 200;
     } else {
         strcpy(resp.body, "File Not Found");
-        resp.status_code = 404;
         resp.status_message = "Not Found";
+        resp.status_code = 404;
     }
 
     char resp_line[128] = {0};
@@ -162,10 +162,18 @@ void prepare_resp_buf(char* resp_buf, http_req_t *req) {
     strcat(resp_buf, resp.body);
     strcat(resp_buf, "\r\n");  
     
+    free_headers(resp.headers_list);
     free(resp.body);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc != 2 || atoi(argv[1]) == 0) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    const int PORT = atoi(argv[1]);
+
     int reuse = 1; 
     int result, sfd;
     sfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -213,15 +221,13 @@ int main() {
 
         http_req_t req;
         parse_http_req(req_buf, &req); 
-        print_http_req(&req);
 
         char resp_buf[MAX_SIZE] = {0};
         prepare_resp_buf(resp_buf, &req);
-        printf("%s", resp_buf);
 
         write(cfd, resp_buf, strlen(resp_buf));
 
-        free_http_req(&req);
+        free_headers(req.headers_list);
         close(cfd);
     }
 
