@@ -7,5 +7,8 @@ EXEC = server
 all:
 	$(CC) $(CFLAGS) $(CFILES) -o $(EXEC)
 
+run: all
+	./$(EXEC) 8080
+
 clean:
 	rm $(EXEC)

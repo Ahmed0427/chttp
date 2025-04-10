@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -24,7 +27,7 @@ typedef struct {
     char *url;         
     char *version;      
     http_header_t *headers_list; 
-    char *body;          
+    char body[MAX_BODY_SIZE];          
 } http_req_t;
 
 typedef struct {
@@ -32,8 +35,64 @@ typedef struct {
     short status_code;         
     char* status_message; 
     http_header_t *headers_list; 
-    char *body;
+    char body[MAX_BODY_SIZE];          
 } http_resp_t;
+
+int is_reg_file(const char *path) {
+    struct stat statbuf;
+    if (stat(path, &statbuf) != 0) return 0;
+    return S_ISREG(statbuf.st_mode);
+}
+
+int is_dir(const char *path) {
+    struct stat statbuf;
+    if (stat(path, &statbuf) != 0) return 0;
+    return S_ISDIR(statbuf.st_mode);
+}
+
+void free_dir_content(char** dir_content) {
+    for (int j = 0; dir_content[j]; j++) {
+        free(dir_content[j]); 
+    }
+    free(dir_content); 
+}
+
+char** get_dir_content(char *path) {
+    int ent_count = 0;
+    struct dirent *ent;
+    DIR *dir = opendir(path);
+    if (!dir) return NULL;
+
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        } 
+        ent_count++;        
+    }
+
+    char **dir_content = calloc(ent_count + 1, sizeof(char*));
+    if (!dir_content) {
+        handle_error("calloc error");
+    }
+
+    rewinddir(dir);
+
+    int i = 0;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        } 
+        dir_content[i] = malloc(strlen(ent->d_name) + 1);
+        if (!dir_content[i]) {
+            handle_error("malloc error");
+        }
+        strcpy(dir_content[i], ent->d_name);
+        i++;
+    }
+
+    closedir(dir);
+    return dir_content;
+}
 
 void free_headers(http_header_t *headers) {
     http_header_t *ent = headers;
@@ -96,19 +155,21 @@ void parse_header_line(char* header_line, http_req_t *req) {
     add_header(&req->headers_list, name, value);
 }
 
-void parse_http_req(char* req_buf, http_req_t *http_req) {
+void parse_http_req(char* req_buf, http_req_t *req) {
     char *saveptr, *header_line;
     char *req_line = strtok_r(req_buf, "\n", &saveptr);
-    parse_req_line(req_line, http_req);
-    http_req->headers_list = NULL;
+    parse_req_line(req_line, req);
+    req->headers_list = NULL;
 
     while (1) {
         header_line = strtok_r(NULL, "\n", &saveptr);
         if (strcmp(header_line, "\r") != 0)
-            parse_header_line(header_line, http_req);
+            parse_header_line(header_line, req);
         else break;
     }
-    http_req->body = strtok_r(NULL, "\r", &saveptr);
+    memset(req->body, 0, sizeof(req->body));
+    char* body_tok = strtok_r(NULL, "\r", &saveptr);
+    if (body_tok) strncpy(req->body, body_tok, sizeof(req->body));
 }
 
 void read_file(char *buffer, char *path, size_t max_size) {
@@ -127,43 +188,106 @@ void read_file(char *buffer, char *path, size_t max_size) {
     } 
 }
 
-void prepare_resp_buf(char* resp_buf, http_req_t *req) {
+void prepare_resp_buf(char *resp_buf, http_resp_t *resp) {
     resp_buf[0] = '\0';
+    char start_line[128] = {0};
+    sprintf(start_line, "%s %d %s\r\n", resp->version,
+            resp->status_code, resp->status_message);
 
-    http_resp_t resp;
-    resp.headers_list = NULL;
-    resp.body = malloc(MAX_BODY_SIZE);
-    memset(resp.body, '\0', MAX_BODY_SIZE);
-    resp.version = req->version;
+    strcat(resp_buf, start_line);
 
-    if (fopen(req->url + 1, "rb")) {
-        read_file(resp.body, req->url + 1, MAX_BODY_SIZE);
-        resp.status_message = "OK";
-        resp.status_code = 200;
-    } else {
-        strcpy(resp.body, "File Not Found");
-        resp.status_message = "Not Found";
-        resp.status_code = 404;
+    http_header_t *ent = resp->headers_list;
+    for (; ent; ent = ent->next) {
+        char header_line[256] = {0};
+        sprintf(header_line, "%s: %s\r\n", ent->name, ent->value);
+        strcat(resp_buf, header_line);
+    }
+    strcat(resp_buf, "\r\n");
+    strcat(resp_buf, resp->body);
+    printf("\r\n");
+}
+
+int handle_index_html(http_resp_t *resp, http_req_t *req) {
+    char path[256] = {0};
+    path[0] = '.';
+    strcat(path, req->url);
+    char** dir_content = get_dir_content(path);
+    for (int i = 0; dir_content[i]; i++) {
+        if (strcmp(dir_content[i], "index.html") == 0) {
+            strcat(path, dir_content[i]);
+            read_file(resp->body, path, MAX_BODY_SIZE);
+            free_dir_content(dir_content);
+            return 1;
+        }
     }
 
-    char resp_line[128] = {0};
-    sprintf(resp_line, "%s %d %s\r\n", resp.version,
-            resp.status_code, resp.status_message);
+    free_dir_content(dir_content);
+    return 0;
+}
 
-    strcat(resp_buf, resp_line);
+void handle_dir_listing(http_resp_t *resp, http_req_t *req) {
+    char dir_listing_html[MAX_BODY_SIZE] = {0};
 
-    char content_length[64];
-    strcat(resp_buf, "Content-Type: text/html\r\n");
-    sprintf(content_length, "Content-Length: %zu\r\n", strlen(resp.body));
-    strcat(resp_buf, content_length);  
+    snprintf(dir_listing_html, MAX_BODY_SIZE,
+        "<!DOCTYPE HTML>"
+        "<html>\n"
+        "<head>\n"
+        "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\">\n"
+        "<title>Directory listing for %s</title>\n"
+        "</head>\n"
+        "<body>\n"
+        "<h1>Directory listing for %s</h1>\n"
+        "<hr>\n"
+        "<ul>\n", req->url, req->url);
 
-    strcat(resp_buf, "\r\n");
+    char path[256] = {0};
+    path[0] = '.';
+    strcat(path, req->url);
+    char** dir_content = get_dir_content(path);
+    for (int i = 0; dir_content[i]; i++) {
+        char ent[256] = {0};
+        snprintf(ent, 256, "<li><a href=\"%s/\">%s/</a></li>\n",
+                 dir_content[i], dir_content[i]);
 
-    strcat(resp_buf, resp.body);
-    strcat(resp_buf, "\r\n");  
-    
-    free_headers(resp.headers_list);
-    free(resp.body);
+        strcat(dir_listing_html, ent);
+    }
+
+    strcat(dir_listing_html, "</ul>\n</body>\n</html>\n");
+    strncpy(resp->body, dir_listing_html, MAX_BODY_SIZE);
+
+    free_dir_content(dir_content);
+}
+
+void prepare_resp(char *resp_buf, http_resp_t *resp, http_req_t *req) {
+    resp->headers_list = NULL;
+    memset(resp->body, '\0', sizeof(resp->body));
+    resp->version = req->version;
+    if (strncmp(req->method, "GET", 3) != 0) {
+        resp->status_message = "Method Not Allowed";
+        resp->status_code = 405;
+    }
+    else if (is_reg_file(req->url + 1)) {
+        read_file(resp->body, req->url + 1, MAX_BODY_SIZE);
+        resp->status_message = "OK";
+        resp->status_code = 200;
+    } else if (is_dir(req->url)) {
+        if (!handle_index_html(resp, req)) {
+            handle_dir_listing(resp, req);
+        } 
+        resp->status_message = "OK";
+        resp->status_code = 200;
+    } else {
+        strcpy(resp->body, "404 Not Found");
+        resp->status_message = "Not Found";
+        resp->status_code = 404;
+    }
+
+    char body_size_cstr[20] = {0};
+    snprintf(body_size_cstr, 20, "%ld", strlen(resp->body));
+    add_header(&resp->headers_list, "Content-Length", body_size_cstr);
+    add_header(&resp->headers_list, "Content-Type", "text/html");
+
+    prepare_resp_buf(resp_buf, resp);
 }
 
 int main(int argc, char **argv) {
@@ -222,12 +346,15 @@ int main(int argc, char **argv) {
         http_req_t req;
         parse_http_req(req_buf, &req); 
 
+        
+        http_resp_t resp;
         char resp_buf[MAX_SIZE] = {0};
-        prepare_resp_buf(resp_buf, &req);
+        prepare_resp(resp_buf, &resp, &req);
 
         write(cfd, resp_buf, strlen(resp_buf));
 
         free_headers(req.headers_list);
+        free_headers(resp.headers_list);
         close(cfd);
     }
 
