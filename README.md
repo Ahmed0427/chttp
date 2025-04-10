@@ -15,10 +15,5 @@ make # to compile
 after you run it on port you can test using `curl` or your browser
 for now it serve files from the current directory and only GET method
 
-### Plans
-
-I want to add the following features to the project:
-- Arguments for the directory to use and port to serve the app to.
-- Directory listings (Frontend in C).
-- 404 page for not found paths.
-- More error checks to make the app a bit friendlier.
+if the current directory has `index.html` or  `index.php`	the server will chose it,
+if it doesn't have it list the directory content
