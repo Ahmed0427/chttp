@@ -51,9 +51,11 @@ int is_dir(const char *path) {
 }
 
 void free_dir_content(char** dir_content) {
-    for (int j = 0; dir_content[j]; j++) {
+    int j;
+    for (j = 0; dir_content[j]; j++) {
         free(dir_content[j]); 
     }
+    free(dir_content[j]); 
     free(dir_content); 
 }
 
@@ -186,6 +188,8 @@ void read_file(char *buffer, char *path, size_t max_size) {
     if (read_size != 1) {
         handle_error("fread error");
     } 
+
+    fclose(fd);
 }
 
 void prepare_resp_buf(char *resp_buf, http_resp_t *resp) {
@@ -209,11 +213,12 @@ void prepare_resp_buf(char *resp_buf, http_resp_t *resp) {
 
 int handle_index_html(http_resp_t *resp, http_req_t *req) {
     char path[256] = {0};
-    path[0] = '.';
+    strcat(path, ".");
     strcat(path, req->url);
     char** dir_content = get_dir_content(path);
     for (int i = 0; dir_content[i]; i++) {
-        if (strcmp(dir_content[i], "index.html") == 0) {
+        if (strcmp(dir_content[i], "index.html") == 0 ||
+            strcmp(dir_content[i], "index.php") == 0) {
             strcat(path, dir_content[i]);
             read_file(resp->body, path, MAX_BODY_SIZE);
             free_dir_content(dir_content);
@@ -241,13 +246,13 @@ void handle_dir_listing(http_resp_t *resp, http_req_t *req) {
         "<ul>\n", req->url, req->url);
 
     char path[256] = {0};
-    path[0] = '.';
+    strcat(path, ".");
     strcat(path, req->url);
     char** dir_content = get_dir_content(path);
     for (int i = 0; dir_content[i]; i++) {
-        char ent[256] = {0};
-        snprintf(ent, 256, "<li><a href=\"%s/\">%s/</a></li>\n",
-                 dir_content[i], dir_content[i]);
+        char ent[512] = {0};
+        snprintf(ent, 512, "<li><a href=\"%s%s\">%s</a></li>\n",
+                 path, dir_content[i], dir_content[i]);
 
         strcat(dir_listing_html, ent);
     }
@@ -268,12 +273,18 @@ void prepare_resp(char *resp_buf, http_resp_t *resp, http_req_t *req) {
     }
     else if (is_reg_file(req->url + 1)) {
         read_file(resp->body, req->url + 1, MAX_BODY_SIZE);
+        if (strstr(req->url, ".html")) {
+            add_header(&resp->headers_list, "Content-Type", "text/html");
+        } else  {
+            add_header(&resp->headers_list, "Content-Type", "text/plain");
+        }
         resp->status_message = "OK";
         resp->status_code = 200;
     } else if (is_dir(req->url)) {
         if (!handle_index_html(resp, req)) {
             handle_dir_listing(resp, req);
         } 
+        add_header(&resp->headers_list, "Content-Type", "text/html");
         resp->status_message = "OK";
         resp->status_code = 200;
     } else {
@@ -285,7 +296,7 @@ void prepare_resp(char *resp_buf, http_resp_t *resp, http_req_t *req) {
     char body_size_cstr[20] = {0};
     snprintf(body_size_cstr, 20, "%ld", strlen(resp->body));
     add_header(&resp->headers_list, "Content-Length", body_size_cstr);
-    add_header(&resp->headers_list, "Content-Type", "text/html");
+    add_header(&resp->headers_list, "Content-Type", "text/plain");
 
     prepare_resp_buf(resp_buf, resp);
 }
@@ -345,6 +356,7 @@ int main(int argc, char **argv) {
 
         http_req_t req;
         parse_http_req(req_buf, &req); 
+        print_http_req(&req); 
 
         
         http_resp_t resp;
