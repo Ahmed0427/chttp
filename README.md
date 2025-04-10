@@ -8,9 +8,11 @@ understand.
 clone and then:
 
 ```console
-make
-./server
+make # to compile
+./server <port>
 ```
+
+after you run it on port you can test using `curl` or your browser
 
 ### Plans
 
