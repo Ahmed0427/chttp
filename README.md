@@ -13,7 +13,7 @@ make # to compile
 ```
 
 after you run it on port you can test using `curl` or your browser
-for now it serve files from the current directory
+for now it serve files from the current directory and only GET method
 
 ### Plans
 
