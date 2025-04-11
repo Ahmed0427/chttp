@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <linux/limits.h>
+#include <time.h>
 
 #define handle_error(msg) \
 do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -152,7 +153,11 @@ void print_full_req(http_req_t *req) {
 }
 
 void print_req(http_req_t *req) {
-    printf("\n%s %s %s\r\n", req->method, req->path, req->version);
+    time_t mytime = time(NULL);
+    char * time_str = ctime(&mytime);
+    time_str[strlen(time_str)-1] = '\0';
+    printf("\n[%s]  %s %s %s\r\n", time_str,
+           req->method, req->path, req->version);
 }
 
 void print_http_resp(http_resp_t *resp) {
@@ -277,26 +282,6 @@ char* read_file(char *path) {
     return buffer;
 }
 
-void prepare_resp_buf(char *resp_buf, http_resp_t *resp) {
-    resp_buf[0] = '\0';
-    char start_line[128] = {0};
-    sprintf(start_line, "%s %d %s\r\n", resp->version,
-            resp->status_code, resp->status_message);
-    strcat(resp_buf, start_line);
-    
-    http_header_t *ent = resp->headers_list;
-    for (; ent; ent = ent->next) {
-        char header_line[256] = {0};
-        sprintf(header_line, "%s: %s\r\n", ent->name, ent->value);
-        strcat(resp_buf, header_line);
-    }
-    
-    strcat(resp_buf, "\r\n");
-    if (resp->body) {
-        strcat(resp_buf, resp->body);
-    }
-}
-
 int handle_index_html(http_resp_t *resp, http_req_t *req) {
     char path[PATH_MAX] = {0};
     strcpy(path, CUR_DIR);
@@ -405,7 +390,64 @@ int handle_dir_listing(http_resp_t *resp, http_req_t *req) {
     return 0;
 }
 
-void prepare_resp(char *resp_buf, http_resp_t *resp, http_req_t *req) {
+char* prepare_resp_buf(http_resp_t *resp) {
+    if (!resp) return NULL;
+    
+    size_t header_size = 128; 
+    http_header_t *ent = resp->headers_list;
+    for (; ent; ent = ent->next) {
+        header_size += strlen(ent->name) + 2 + strlen(ent->value) + 2;
+    }
+    
+    size_t body_size = resp->body ? strlen(resp->body) : 0;
+    size_t total_size = header_size + 2 + body_size + 1;
+    
+    char *resp_buf = calloc(total_size, 1);
+    if (!resp_buf) return NULL;
+    
+    char *ptr = resp_buf;
+    
+    int bytes_written = snprintf(ptr, total_size, "%s %d %s\r\n", 
+                              resp->version, resp->status_code, resp->status_message);
+    if (bytes_written < 0) {
+        free(resp_buf);
+        return NULL;
+    }
+
+    ptr += bytes_written;
+    size_t remaining = total_size - bytes_written;
+    
+    ent = resp->headers_list;
+    for (; ent; ent = ent->next) {
+        bytes_written = snprintf(ptr, remaining, "%s: %s\r\n", ent->name, ent->value);
+        if (bytes_written < 0 || bytes_written >= (int)remaining) {
+            free(resp_buf);
+            return NULL;
+        }
+        ptr += bytes_written;
+        remaining -= bytes_written;
+    }
+    
+    bytes_written = snprintf(ptr, remaining, "\r\n");
+    if (bytes_written < 0 || bytes_written >= (int)remaining) {
+        free(resp_buf);
+        return NULL;
+    }
+    ptr += bytes_written;
+    remaining -= bytes_written;
+    
+    if (resp->body && body_size > 0) {
+        bytes_written = snprintf(ptr, remaining, "%s", resp->body);
+        if (bytes_written < 0 || bytes_written >= (int)remaining) {
+            free(resp_buf);
+            return NULL;
+        }
+    }
+    
+    return resp_buf;
+}
+
+char* prepare_resp(http_resp_t *resp, http_req_t *req) {
     resp->headers_list = NULL;
     resp->version = strdup(req->version);
     if (!resp->version) handle_error("strdup error");
@@ -473,7 +515,9 @@ void prepare_resp(char *resp_buf, http_resp_t *resp, http_req_t *req) {
     snprintf(body_size_cstr, sizeof(body_size_cstr), "%ld", strlen(resp->body));
     add_header(&resp->headers_list, "Content-Length", body_size_cstr);
     add_header(&resp->headers_list, "Content-Type", content_type);
-    prepare_resp_buf(resp_buf, resp);
+    char *resp_buf = prepare_resp_buf(resp);
+    if (!resp_buf) return strdup("");
+    return resp_buf;
 }
 
 int main(int argc, char **argv) {
@@ -543,11 +587,11 @@ int main(int argc, char **argv) {
         
         http_resp_t resp;
         memset(&resp, 0, sizeof(http_resp_t));
-        char resp_buf[MAX_SIZE] = {0};
-        prepare_resp(resp_buf, &resp, &req);
+        char *resp_buf = prepare_resp(&resp, &req);
         
         write(cfd, resp_buf, strlen(resp_buf));
         
+        free(resp_buf);
         free_resp(&resp);
         free_req(&req);
 
