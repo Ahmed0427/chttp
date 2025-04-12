@@ -475,9 +475,10 @@ char* prepare_resp(http_resp_t *resp, http_req_t *req) {
     else if (is_reg_file(clean_path)) {
         free(resp->body);
         resp->body = read_file(clean_path);
-        
         if (strstr(req->path, ".html")) {
             content_type = "text/html";
+        } else if (strstr(req->path, ".css")) {
+            content_type = "text/css";
         } else {
             content_type = "text/plain";
         }
