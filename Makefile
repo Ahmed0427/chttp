@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -pedantic -ggdb 
 
 CFILES = main.c
-EXEC = server
+EXEC = chttp
 
 all:
 	@$(CC) $(CFLAGS) $(CFILES) -o $(EXEC)
